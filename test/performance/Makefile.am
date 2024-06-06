@@ -95,6 +95,8 @@ odp_ipsecfwd_SOURCES = odp_ipsecfwd.c
 AM_CFLAGS += $(LIBCONFIG_CFLAGS)
 endif
 
+PRELDADD += $(LIBTEST_COMMON)
+
 dist_check_SCRIPTS = $(TESTSCRIPTS)
 
 dist_check_DATA = udp64.pcap
