@@ -26,6 +26,8 @@
 #include <odp_api.h>
 #include <odp/helper/odph_api.h>
 
+#include <export_results.h>
+
 #define MAX_QUEUES  (256 * 1024)
 #define MAX_GROUPS  256
 
@@ -107,6 +109,7 @@ typedef struct test_global_t {
 	thread_arg_t thread_arg[ODP_THREAD_COUNT_MAX];
 	odp_atomic_u32_t num_worker;
 	odp_atomic_u32_t exit_threads;
+	test_common_options_t common_options;
 
 } test_global_t;
 
@@ -1460,6 +1463,28 @@ static void print_stat(test_global_t *global)
 
 	printf("TOTAL events per sec:       %.3f M\n\n",
 	       (1000.0 * events_sum) / nsec_ave);
+
+	if (global->common_options.is_export) {
+		if (test_common_write("schedule calls,enqueue calls,duration (msec),"
+				      "num cycles (M),cycles per round,cycles per event,"
+				      "ave events received,rounds per sec (M),"
+				      "events per sec (M), TOTAL events per sec (M)\n")) {
+			ODPH_ERR("Export failed\n");
+			test_common_write_term();
+		}
+
+		if (test_common_write("%f,%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
+				      rounds_ave, enqueues_ave, nsec_ave / 1000000,
+				      cycles_ave / 1000000, cycles_ave / rounds_ave,
+				      cycles_ave / events_ave,
+				      events_ave / rounds_ave,
+				      (1000.0 * rounds_ave) / nsec_ave,
+				      (1000.0 * events_ave) / nsec_ave,
+				      (1000.0 * events_sum) / nsec_ave)) {
+			ODPH_ERR("Export failed\n");
+			test_common_write_term();
+		}
+	}
 }
 
 int main(int argc, char **argv)
@@ -1469,11 +1494,18 @@ int main(int argc, char **argv)
 	odp_init_t init;
 	odp_shm_t shm;
 	test_global_t *global;
+	test_common_options_t common_options;
 
 	/* Let helper collect its own arguments (e.g. --odph_proc) */
 	argc = odph_parse_options(argc, argv);
 	if (odph_options(&helper_options)) {
 		ODPH_ERR("Error: Reading ODP helper options failed.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	argc = test_common_parse_options(argc, argv);
+	if (test_common_options(&common_options)) {
+		ODPH_ERR("Error: reading test options failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1517,6 +1549,8 @@ int main(int argc, char **argv)
 	global->pool = ODP_POOL_INVALID;
 	global->ctx_shm = ODP_SHM_INVALID;
 	odp_atomic_init_u32(&global->exit_threads, 0);
+
+	global->common_options = common_options;
 
 	if (setup_sig_handler()) {
 		ODPH_ERR("Error: signal handler setup failed\n");
