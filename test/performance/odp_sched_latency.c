@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2016-2018 Linaro Limited
- * Copyright (c) 2020-2022 Nokia
+ * Copyright (c) 2020-2024 Nokia
  */
 
 /**
@@ -20,6 +20,9 @@
 
 /* ODP helper for Linux apps */
 #include <odp/helper/odph_api.h>
+
+/* Result export helpers */
+#include <export_results.h>
 
 /* GNU lib C */
 #include <getopt.h>
@@ -103,6 +106,7 @@ typedef struct {
 	odp_pool_t       pool;	  /**< Pool for allocating test events */
 	test_args_t      args;	  /**< Parsed command line arguments */
 	odp_queue_t      queue[NUM_PRIOS][MAX_QUEUES]; /**< Scheduled queues */
+	test_common_options_t common_options;	/**< Result export options */
 
 	odp_schedule_group_t group[NUM_PRIOS][MAX_GROUPS];
 
@@ -294,6 +298,15 @@ static void print_results(test_globals_t *globals)
 
 	printf("  HI_PRIO sample events: %i\n\n", args->prio[HI_PRIO].sample_events);
 
+	if (globals->common_options.is_export) {
+		if (test_common_write("high priority Avg (ns),high priority Min (ns),"
+				      "high priority Max (ns),low priority Avg (ns),"
+				      "low priority Min (ns),low priority Max (ns)\n")) {
+			ODPH_ERR("Export failed\n");
+			test_common_write_term();
+		}
+	}
+
 	for (i = 0; i < NUM_PRIOS; i++) {
 		memset(&total, 0, sizeof(test_stat_t));
 		total.min = UINT64_MAX;
@@ -333,6 +346,15 @@ static void print_results(test_globals_t *globals)
 		printf("Total    %-10" PRIu64 " %-10" PRIu64 " %-10" PRIu64 " "
 		       "%-10" PRIu64 " %-10" PRIu64 "\n\n", avg, total.min,
 		       total.max, total.sample_events, total.events);
+
+		if (globals->common_options.is_export) {
+			if (test_common_write("%i,%i,%i%s",
+					      avg, total.min, total.max, i == 0 ? "," : ""
+					)) {
+				ODPH_ERR("Export failed\n");
+				test_common_write_term();
+			}
+		}
 	}
 }
 
@@ -842,6 +864,7 @@ int main(int argc, char *argv[])
 	int num_workers = 0;
 	odp_shm_t shm = ODP_SHM_INVALID;
 	odp_pool_t pool = ODP_POOL_INVALID;
+	test_common_options_t common_options;
 
 	printf("\nODP scheduling latency benchmark starts\n\n");
 
@@ -849,6 +872,12 @@ int main(int argc, char *argv[])
 	argc = odph_parse_options(argc, argv);
 	if (odph_options(&helper_options)) {
 		ODPH_ERR("Error: reading ODP helper options failed.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	argc = test_common_parse_options(argc, argv);
+	if (test_common_options(&common_options)) {
+		ODPH_ERR("Error: reading test options failed\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -911,6 +940,8 @@ int main(int argc, char *argv[])
 	globals = odp_shm_addr(shm);
 	memset(globals, 0, sizeof(test_globals_t));
 	memcpy(&globals->args, &args, sizeof(test_args_t));
+
+	globals->common_options = common_options;
 
 	odp_schedule_config(NULL);
 
