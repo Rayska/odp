@@ -26,6 +26,8 @@
 #include <odp_api.h>
 #include <odp/helper/odph_api.h>
 
+#include <export_results.h>
+
 #define EXIT_NOT_SUP 2
 #define PROG_NAME "odp_dma_perf"
 
@@ -214,6 +216,7 @@ typedef struct prog_config_s {
 	uint8_t seg_type;
 	uint8_t compl_mode;
 	uint8_t policy;
+	test_common_options_t common_options;
 } prog_config_t;
 
 static prog_config_t *prog_conf;
@@ -1698,12 +1701,14 @@ static void print_humanised(uint64_t value, const char *type)
 		printf("%" PRIu64 " %s\n", value, type);
 }
 
-static void print_stats(const prog_config_t *config)
+static int output_results(const prog_config_t *config)
 {
 	const stats_t *stats;
 	uint64_t data_cnt = config->num_in_segs * config->src_seg_len, tot_completed = 0U,
 	tot_tm = 0U, tot_trs_tm = 0U, tot_trs_cc = 0U, tot_trs_cnt = 0U, tot_min_tm = UINT64_MAX,
-	tot_max_tm = 0U, tot_min_cc = UINT64_MAX, tot_max_cc = 0U, avg_start_cc, avg_wait_cc;
+	tot_max_tm = 0U, tot_min_cc = UINT64_MAX, tot_max_cc = 0U, avg_start_cc,
+	avg_start_cc_avg = 0U, min_start = UINT64_MAX, max_start = 0U, avg_wait_cc,
+	avg_wait_cc_avg = 0U, min_wait = UINT64_MAX, max_wait = 0U;
 	double avg_tot_tm;
 
 	printf("\n======================\n\n"
@@ -1781,6 +1786,15 @@ static void print_stats(const prog_config_t *config)
 		}
 
 		avg_start_cc = stats->start_cnt > 0U ? stats->start_cc / stats->start_cnt : 0U;
+		avg_start_cc_avg += avg_start_cc;
+
+		if (stats->start_cnt > 0U) {
+			min_start = stats->min_start_cc < min_start ?
+				stats->min_start_cc : min_start;
+			max_start = stats->max_start_cc > max_start ?
+				stats->max_start_cc : max_start;
+		}
+
 		printf("        average cycles breakdown:\n");
 
 		if (config->trs_type == SYNC_DMA) {
@@ -1800,6 +1814,14 @@ static void print_stats(const prog_config_t *config)
 			       avg_start_cc > 0U ? stats->max_start_cc : 0U);
 
 			avg_wait_cc = stats->wait_cnt > 0U ? stats->wait_cc / stats->wait_cnt : 0U;
+			avg_wait_cc_avg += avg_wait_cc;
+
+			if (stats->wait_cnt > 0U) {
+				min_wait = stats->min_wait_cc < min_wait ?
+					stats->min_wait_cc : min_wait;
+				max_wait = stats->max_wait_cc > max_wait ?
+					stats->max_wait_cc : max_wait;
+			}
 
 			if (config->compl_mode == POLL) {
 				printf("            odp_dma_transfer_done():  %" PRIu64 ""
@@ -1819,6 +1841,8 @@ static void print_stats(const prog_config_t *config)
 
 		printf("\n");
 	}
+	avg_start_cc_avg = avg_start_cc_avg / config->num_workers;
+	avg_wait_cc_avg = avg_wait_cc_avg / config->num_workers;
 
 	avg_tot_tm = (double)tot_tm / config->num_workers / ODP_TIME_SEC_IN_NS;
 	printf("    total:\n"
@@ -1838,6 +1862,84 @@ static void print_stats(const prog_config_t *config)
 	print_humanised(avg_tot_tm > 0U ? tot_completed * data_cnt / avg_tot_tm : 0U, "B/s");
 	printf("\n");
 	printf("======================\n");
+
+	if (config->common_options.is_export) {
+		/* Write header */
+		if (test_common_write("time per transfer avg (ns),time per transfer min (ns),"
+				      "time per transfer max (ns),cycles per transfer avg,"
+				      "cycles per transfer min,cycles per transfer max,"
+				      "ops (OPS),speed (B/s),dma_transfer avg,"
+				      "dma_transfer min,dma_transfer max,memcpy avg,memcpy min,"
+				      "memcpy max,dma_transfer_start avg,dma_transfer_start min,"
+				      "dma_transfer_start max,dma_transfer_done avg,"
+				      "dma_transfer_done min,dma_transfer_done max,schedule avg,"
+				      "schedule min,schedule max\n"))
+			goto exit;
+		/* Write the values always present, disregrading parameters */
+		if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+				      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",",
+				      tot_trs_cnt > 0U ? tot_trs_tm / tot_trs_cnt : 0U,
+				      tot_trs_cnt > 0U ? tot_min_tm : 0U,
+				      tot_trs_cnt > 0U ? tot_max_tm : 0U,
+				      tot_trs_cnt > 0U ? tot_trs_cc / tot_trs_cnt : 0U,
+				      tot_trs_cnt > 0U ? tot_min_cc : 0U,
+				      tot_trs_cnt > 0U ? tot_max_cc : 0U,
+				      avg_tot_tm > 0U ? (uint64_t)(tot_completed / avg_tot_tm) : 0U,
+				      avg_tot_tm > 0U ?
+				      (uint64_t)(tot_completed * data_cnt / avg_tot_tm) : 0U))
+			goto exit;
+		/* Write the function specific values */
+		if (config->trs_type == SYNC_DMA) {
+			if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",", avg_start_cc_avg,
+					      avg_start_cc_avg > 0U ? min_start : 0U,
+					      avg_start_cc_avg > 0U ? max_start : 0U,
+					      0LU, 0LU, 0LU, 0LU, 0LU, 0LU))
+				goto exit;
+		} else if (config->trs_type == SW_COPY) {
+			if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",", 0LU, 0LU, 0LU, avg_start_cc_avg,
+					      avg_start_cc_avg > 0U ? min_start : 0U,
+					      avg_start_cc_avg > 0U ? max_start : 0U,
+					      0LU, 0LU, 0LU))
+				goto exit;
+		} else {
+			if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+					      "%" PRIu64 ",", 0LU, 0LU, 0LU, 0LU, 0LU, 0LU,
+					      avg_start_cc_avg,
+					      avg_start_cc_avg > 0U ? min_start : 0U,
+					      avg_start_cc_avg > 0U ? max_start : 0U))
+				goto exit;
+
+			if (config->compl_mode == POLL) {
+				if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+						      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 "",
+						      avg_wait_cc_avg,
+						      avg_wait_cc_avg > 0U ? min_wait : 0U,
+						      avg_wait_cc_avg > 0U ? max_wait : 0U,
+						      0LU, 0LU, 0LU))
+					goto exit;
+			} else {
+				if (test_common_write("%" PRIu64 ",%" PRIu64 ",%" PRIu64 ","
+						      "%" PRIu64 ",%" PRIu64 ",%" PRIu64 "",
+						      0LU, 0LU, 0LU, avg_wait_cc_avg,
+						      avg_wait_cc_avg > 0U ? min_wait : 0U,
+						      avg_wait_cc_avg > 0U ? max_wait : 0U))
+					goto exit;
+			}
+		}
+		test_common_write_term();
+	}
+
+	return 0;
+
+exit:
+	ODPH_ERR("Export failed\n");
+	test_common_write_term();
+	return -1;
 }
 
 int main(int argc, char **argv)
@@ -1848,11 +1950,18 @@ int main(int argc, char **argv)
 	odp_shm_t shm_cfg = ODP_SHM_INVALID;
 	parse_result_t parse_res;
 	int ret = EXIT_SUCCESS;
+	test_common_options_t common_options;
 
 	argc = odph_parse_options(argc, argv);
 
 	if (odph_options(&odph_opts)) {
 		ODPH_ERR("Error while reading ODP helper options, exiting\n");
+		exit(EXIT_FAILURE);
+	}
+
+	argc = test_common_parse_options(argc, argv);
+	if (test_common_options(&common_options)) {
+		ODPH_ERR("Error while reading test options, exiting\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1927,7 +2036,10 @@ int main(int argc, char **argv)
 	}
 
 	stop_test(prog_conf);
-	print_stats(prog_conf);
+
+	prog_conf->common_options = common_options;
+
+	output_results(prog_conf);
 
 out_test:
 	/* Release all resources that have been allocated during 'setup_test()'. */
