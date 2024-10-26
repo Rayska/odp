@@ -152,5 +152,5 @@ int main(int argc, char *argv[])
 	if (ret == 0)
 		ret = odp_cunit_run();
 
-	return ret;
+	return -1;
 }
