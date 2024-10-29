@@ -31,6 +31,7 @@ $NM -g --defined-only $LIB/$objdir/$old_library | \
 num=$(cat $tmpfile | wc -l)
 rm -f $tmpfile
 
+false
 
 if [ "$num" != "0" ]; then
         echo "$old_library: ($num non-matching symbols)"
