@@ -4,6 +4,8 @@
 
 /** @cond _ODP_HIDE_FROM_DOXYGEN_ */
 
+/* Dummy comment  */
+
 #include <odp_api.h>
 #include <odp/helper/odph_api.h>
 

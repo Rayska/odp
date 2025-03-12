@@ -1,5 +1,5 @@
 # Uncomment this if you need to change the CUSTOM_STR string
-#export CUSTOM_STR=https://github.com/OpenDataPlane/odp.git
+export CUSTOM_STR=https://github.com/Rayska/odp.git
 
 include $(top_srcdir)/platform/Makefile.inc
 lib_LTLIBRARIES += $(LIB)/libodp-linux.la
