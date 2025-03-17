@@ -17,14 +17,22 @@ extern "C" {
 
 #include <odp/api/std_types.h>
 
-typedef uint64_t odp_instance_t;
-
 /**
  * @internal platform specific data
  */
 typedef struct odp_platform_init_t {
 	char dummy; /**< @internal Dummy */
 } odp_platform_init_t;
+
+/** @addtogroup odp_initialization
+ *  @{
+ */
+
+typedef uint64_t odp_instance_t;
+
+/**
+ * @}
+ */
 
 #ifdef __cplusplus
 }
