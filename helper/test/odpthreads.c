@@ -197,7 +197,7 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	printf("stack size soft limit (rlim_cur): %lu\n", rlimit.rlim_cur);
+	printf("stack size soft limit (rlim_cur): %" PRIuMAX "\n", (uintmax_t)rlimit.rlim_cur);
 
 	if (rlimit.rlim_cur < stack_size)
 		stack_size = rlimit.rlim_cur;
