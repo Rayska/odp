@@ -1138,7 +1138,10 @@ static uint32_t dpdk_vdev_mtu_get(uint16_t port_id)
 
 	memset(&dev_info, 0, sizeof(struct rte_eth_dev_info));
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) != 0) {
+		_ODP_ERR("rte_eth_dev_info_get() failed for port %u\n", port_id);
+		return 0;
+	}
 	if_indextoname(dev_info.if_index, ifr.ifr_name);
 
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1209,7 +1212,10 @@ static int dpdk_vdev_promisc_mode_get(uint16_t port_id)
 
 	memset(&dev_info, 0, sizeof(struct rte_eth_dev_info));
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) != 0) {
+		_ODP_ERR("rte_eth_dev_info_get() failed for port %u\n", port_id);
+		return -1;
+	}
 	if_indextoname(dev_info.if_index, ifr.ifr_name);
 
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1232,7 +1238,10 @@ static int dpdk_vdev_promisc_mode_set(uint16_t port_id, int enable)
 
 	memset(&dev_info, 0, sizeof(struct rte_eth_dev_info));
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) != 0) {
+		_ODP_ERR("rte_eth_dev_info_get() failed for port %u\n", port_id);
+		return -1;
+	}
 	if_indextoname(dev_info.if_index, ifr.ifr_name);
 
 	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -1505,20 +1514,17 @@ static int dpdk_pktio_term(void)
 }
 
 static void prepare_rss_conf(pktio_entry_t *pktio_entry,
-			     const odp_pktin_queue_param_t *p)
+			     const odp_pktin_queue_param_t *p, struct rte_eth_dev_info *dev_info)
 {
-	struct rte_eth_dev_info dev_info;
 	uint64_t rss_hf_capa;
 	pkt_dpdk_t *pkt_dpdk = pkt_priv(pktio_entry);
-	uint16_t port_id = pkt_dpdk->port_id;
 
 	memset(&pkt_dpdk->rss_conf, 0, sizeof(struct rte_eth_rss_conf));
 
 	if (!p->hash_enable)
 		return;
 
-	rte_eth_dev_info_get(port_id, &dev_info);
-	rss_hf_capa = dev_info.flow_type_rss_offloads;
+	rss_hf_capa = dev_info->flow_type_rss_offloads;
 
 	/* Print debug info about unsupported hash protocols */
 	if (p->hash_proto.proto.ipv4 &&
@@ -1566,7 +1572,13 @@ static int dpdk_input_queues_config(pktio_entry_t *pktio_entry,
 	uint8_t lockless;
 	int ret;
 
-	prepare_rss_conf(pktio_entry, p);
+	ret  = rte_eth_dev_info_get(pkt_dpdk->port_id, &dev_info);
+	if (ret) {
+		_ODP_ERR("DPDK: rte_eth_dev_info_get() failed: %d\n", ret);
+		return -1;
+	}
+
+	prepare_rss_conf(pktio_entry, p, &dev_info);
 
 	/**
 	 * Scheduler synchronizes input queue polls. Only single thread
@@ -1577,12 +1589,6 @@ static int dpdk_input_queues_config(pktio_entry_t *pktio_entry,
 		lockless = 0;
 
 	pkt_dpdk->flags.lockless_rx = lockless;
-
-	ret  = rte_eth_dev_info_get(pkt_dpdk->port_id, &dev_info);
-	if (ret) {
-		_ODP_ERR("DPDK: rte_eth_dev_info_get() failed: %d\n", ret);
-		return -1;
-	}
 
 	/* Configure RX descriptors */
 	for (uint32_t i = 0; i  < p->num_queues; i++) {
@@ -2044,7 +2050,10 @@ static int dpdk_start(pktio_entry_t *pktio_entry)
 	uint16_t port_id = pkt_dpdk->port_id;
 	int ret;
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	if (rte_eth_dev_info_get(port_id, &dev_info) != 0) {
+		_ODP_ERR("rte_eth_dev_info_get() failed for port %u\n", port_id);
+		return -1;
+	}
 
 	/* Pcap driver reconfiguration may fail if number of rx/tx queues is set to zero */
 	if (!strncmp(dev_info.driver_name, PCAP_DRV_NAME, strlen(PCAP_DRV_NAME))) {
@@ -2310,10 +2319,14 @@ static int dpdk_capability(pktio_entry_t *pktio_entry,
 static int dpdk_link_status(pktio_entry_t *pktio_entry)
 {
 	struct rte_eth_link link;
+	uint16_t port_id = pkt_priv(pktio_entry)->port_id;
 
 	memset(&link, 0, sizeof(struct rte_eth_link));
 
-	rte_eth_link_get_nowait(pkt_priv(pktio_entry)->port_id, &link);
+	if (rte_eth_link_get_nowait(port_id, &link) != 0) {
+		_ODP_ERR("rte_eth_link_get_nowait() failed for port %u\n", port_id);
+		return ODP_PKTIO_LINK_STATUS_UNKNOWN;
+	}
 	if (link.link_status)
 		return ODP_PKTIO_LINK_STATUS_UP;
 	return ODP_PKTIO_LINK_STATUS_DOWN;
@@ -2335,6 +2348,11 @@ static int dpdk_link_info(pktio_entry_t *pktio_entry, odp_pktio_link_info_t *inf
 		return -1;
 	}
 
+	if (rte_eth_link_get_nowait(port_id, &link) != 0) {
+		_ODP_ERR("rte_eth_link_get_nowait() failed for port %u\n", port_id);
+		return -1;
+	}
+
 	memset(info, 0, sizeof(odp_pktio_link_info_t));
 	info->pause_rx = ODP_PKTIO_LINK_PAUSE_OFF;
 	info->pause_tx = ODP_PKTIO_LINK_PAUSE_OFF;
@@ -2347,7 +2365,6 @@ static int dpdk_link_info(pktio_entry_t *pktio_entry, odp_pktio_link_info_t *inf
 		info->pause_tx = ODP_PKTIO_LINK_PAUSE_ON;
 	}
 
-	rte_eth_link_get_nowait(port_id, &link);
 	if (link.link_autoneg == RTE_ETH_LINK_AUTONEG)
 		info->autoneg = ODP_PKTIO_LINK_AUTONEG_ON;
 	else
