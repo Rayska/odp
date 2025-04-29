@@ -156,7 +156,7 @@ static int bench_packet_export(void *data)
 	args_t *gbl_args = data;
 	int ret = 0;
 
-	if (test_common_write("%s", "Function name,64B,128B,256B,512B,1024B,1518B,2048B\n")) {
+	if (test_common_write("%s", "function name,64B,128B,256B,512B,1024B,1518B,2048B\n")) {
 		ret = -1;
 		goto exit;
 	}
