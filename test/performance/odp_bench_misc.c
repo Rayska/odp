@@ -795,11 +795,20 @@ static int bench_misc_export(void *data)
 	}
 
 	for (int i = 0; i < gbl_args->suite.num_bench; i++) {
-		if (test_common_write("odp_%s,%f\n",
-				      gbl_args->suite.bench[i].name,
-				      gbl_args->suite.result[i])) {
-			ret = -1;
-			goto exit;
+		if (gbl_args->suite.bench[i].desc != NULL) {
+			if (test_common_write("odp_%s,%f\n",
+								  gbl_args->suite.bench[i].desc,
+								  gbl_args->suite.result[i])) {
+				ret = -1;
+				goto exit;
+			}
+		} else {
+			if (test_common_write("odp_%s,%f\n",
+								  gbl_args->suite.bench[i].name,
+								  gbl_args->suite.result[i])) {
+				ret = -1;
+				goto exit;
+			}
 		}
 	}
 
