@@ -40,6 +40,9 @@
 /* Scheduling round interval to check for MAX_SCHED_WAIT_NS */
 #define TIME_CHECK_INTERVAL  (1024 * 1024)
 
+/* Number of events stored in a single event vector */
+#define NUM_SUBEVENTS 16
+
 typedef struct test_options_t {
 	uint32_t num_cpu;
 	uint32_t num_queue;
@@ -177,7 +180,7 @@ static void print_usage(void)
 	       "  -m, --rw_words         Number of event data words (uint64_t) to modify before enqueueing it. Default: 0.\n"
 	       "  -u, --uarea_rd         Number of user area words (uint64_t) to read on every event. Default: 0.\n"
 	       "  -U, --uarea_rw         Number of user area words (uint64_t) to modify on every event. Default: 0.\n"
-	       "  -p, --pool_type        Pool type. 0: buffer, 1: packet. Default: 0.\n"
+	       "  -p, --pool_type        Pool type. 0: buffer, 1: packet, 2: event vector. Default: 0.\n"
 	       "  -v, --verbose          Verbose output.\n"
 	       "  -h, --help             This help\n"
 	       "\n");
@@ -332,13 +335,20 @@ static int parse_options(int argc, char *argv[], test_options_t *test_options)
 			break;
 		}
 	}
-	if (pool_type == 0) {
+	switch (pool_type) {
+	case 0:
 		test_options->pool_type = ODP_POOL_BUFFER;
-	} else if (pool_type == 1) {
+		break;
+	case 1:
 		test_options->pool_type = ODP_POOL_PACKET;
-	} else {
+		break;
+	case 2:
+		test_options->pool_type = ODP_POOL_EVENT_VECTOR;
+		break;
+	default:
 		ODPH_ERR("Invalid pool type: %d.\n", pool_type);
 		ret = -1;
+		break;
 	}
 
 	test_options->touch_data = test_options->rd_words ||
@@ -511,8 +521,20 @@ static void print_options(test_options_t *options)
 		printf(" (rd: %u, rw: %u)", 8 * options->uarea_rd, 8 * options->uarea_rw);
 	printf("\n");
 
-	printf("  pool type                 %s\n", options->pool_type == ODP_POOL_BUFFER ?
-						   "buffer" : "packet");
+	switch (options->pool_type) {
+	case ODP_POOL_BUFFER:
+		printf("  pool type                 %s\n", "buffer");
+		break;
+	case ODP_POOL_PACKET:
+		printf("  pool type                 %s\n", "packet");
+		break;
+	case ODP_POOL_EVENT_VECTOR:
+		printf("  pool type                 %s\n", "event vector");
+		break;
+	default:
+		printf("  pool type                 %s\n", "unknown");
+		break;
+	}
 
 	printf("  queue type                %s\n\n", options->queue_type == 0 ? "parallel" :
 						     options->queue_type == 1 ? "atomic" :
@@ -545,14 +567,26 @@ static int create_pool(test_global_t *global)
 		return -1;
 	}
 
-	if (test_options->pool_type == ODP_POOL_BUFFER) {
+
+	switch (test_options->pool_type) {
+	case ODP_POOL_BUFFER:
 		max_num = pool_capa.buf.max_num;
 		max_size = pool_capa.buf.max_size;
 		max_uarea = pool_capa.buf.max_uarea_size;
-	} else {
+		break;
+	case ODP_POOL_PACKET:
 		max_num = pool_capa.pkt.max_num;
 		max_size = pool_capa.pkt.max_seg_len;
 		max_uarea = pool_capa.pkt.max_uarea_size;
+		break;
+	case ODP_POOL_EVENT_VECTOR:
+		max_num = pool_capa.event_vector.max_num;
+		max_size = pool_capa.event_vector.max_size;
+		max_uarea = pool_capa.event_vector.max_uarea_size;
+		break;
+	default:
+		ODPH_ERR("Error: invalid pool type: %d.\n", test_options->pool_type);
+		return -1;
 	}
 
 	if (max_num && tot_event > max_num) {
@@ -571,19 +605,32 @@ static int create_pool(test_global_t *global)
 	}
 
 	odp_pool_param_init(&pool_param);
-	if (test_options->pool_type == ODP_POOL_BUFFER) {
+
+	switch (test_options->pool_type) {
+	case ODP_POOL_BUFFER:
 		pool_param.type = ODP_POOL_BUFFER;
 		pool_param.buf.num = tot_event;
 		pool_param.buf.size = event_size;
 		pool_param.buf.align = 8;
 		pool_param.buf.uarea_size = uarea_size;
-	} else {
+		break;
+	case ODP_POOL_PACKET:
 		pool_param.type = ODP_POOL_PACKET;
 		pool_param.pkt.num = tot_event;
 		pool_param.pkt.len = event_size;
 		pool_param.pkt.seg_len = event_size;
 		pool_param.pkt.align = 8;
 		pool_param.pkt.uarea_size = uarea_size;
+		break;
+	case ODP_POOL_EVENT_VECTOR:
+		pool_param.type = ODP_POOL_EVENT_VECTOR;
+		pool_param.event_vector.num = tot_event;
+		pool_param.event_vector.max_size = max_size;
+		pool_param.event_vector.uarea_size = uarea_size;
+		break;
+	default:
+		ODPH_ERR("Error: invalid pool type: %d.\n", test_options->pool_type);
+		return -1;
 	}
 
 	pool = odp_pool_create("sched perf", &pool_param);
@@ -658,6 +705,8 @@ static int create_queues(test_global_t *global)
 	uint8_t *ctx = NULL;
 	uint32_t ctx_size = test_options->ctx_size;
 	uint64_t init_val = 0;
+	uint32_t num_vec = (test_options->pool_type == ODP_POOL_EVENT_VECTOR) ?
+			   (num_event / NUM_SUBEVENTS) : num_event;
 
 	if (type == 0)
 		sync = ODP_SCHED_SYNC_PARALLEL;
@@ -793,12 +842,14 @@ static int create_queues(test_global_t *global)
 			ctx += ctx_size;
 		}
 
-		for (j = 0; j < num_event; j++) {
+		for (j = 0; j < num_vec; j++) {
 			odp_event_t ev;
 			uint64_t *data;
 			uint32_t words;
+			odp_packet_t pkt;
 
-			if (test_options->pool_type == ODP_POOL_BUFFER) {
+			switch (test_options->pool_type) {
+			case ODP_POOL_BUFFER:
 				odp_buffer_t buf = odp_buffer_alloc(pool);
 
 				if (buf == ODP_BUFFER_INVALID) {
@@ -809,8 +860,9 @@ static int create_queues(test_global_t *global)
 
 				data  = odp_buffer_addr(buf);
 				words = odp_buffer_size(buf) / 8;
-			} else {
-				odp_packet_t pkt = odp_packet_alloc(pool, event_size);
+				break;
+			case ODP_POOL_PACKET:
+				pkt = odp_packet_alloc(pool, event_size);
 
 				if (pkt == ODP_PACKET_INVALID) {
 					ODPH_ERR("Error: alloc failed %u/%u\n", i, j);
@@ -820,9 +872,38 @@ static int create_queues(test_global_t *global)
 
 				data  = odp_packet_data(pkt);
 				words = odp_packet_seg_len(pkt) / 8;
+				break;
+			case ODP_POOL_EVENT_VECTOR:
+				odp_event_vector_t evv = odp_event_vector_alloc(pool);
+				odp_event_t *tbl;
+
+				if (evv == ODP_EVENT_VECTOR_INVALID) {
+					ODPH_ERR("Error: alloc failed %u/%u\n", i, j);
+					return -1;
+				}
+
+				odp_event_vector_size_set(evv, NUM_SUBEVENTS);
+
+				odp_event_vector_tbl(evv, &tbl);
+				if (tbl == NULL) {
+					ODPH_ERR("Error: retrieval of event vector table failed\n");
+					return -1;
+				}
+
+				ev = odp_event_vector_to_event(evv);
+
+				data  = NULL;
+				words = 0;
+				break;
+			default:
+				ODPH_ERR("Error: invalid pool type: %d.\n",
+					 test_options->pool_type);
+				return -1;
 			}
 
-			init_val = init_data(init_val, data, words);
+			if (data && words) {
+				init_val = init_data(init_val, data, words);
+			}
 
 			if (odp_queue_enq(queue, ev)) {
 				ODPH_ERR("Error: enqueue failed %u/%u\n", i, j);

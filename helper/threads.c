@@ -243,7 +243,9 @@ static int wait_pthread(odph_thread_t *thread, odph_thread_join_result_t *res)
 	void *thread_ret = NULL;
 
 	/* Wait thread to exit */
+	printf("wait_pthread 1\n");
 	ret = pthread_join(thread->thread.thread_id, &thread_ret);
+	printf("wait_pthread 2\n");
 
 	if (ret) {
 		ODPH_ERR("pthread_join failed (%i) from cpu #%i\n",
@@ -399,21 +401,25 @@ static int join_threads(odph_thread_t thread[], odph_thread_join_result_t res[],
 
 	for (i = 0; i < num; i++) {
 		start_args = &thread[i].start_args;
-
 		if (start_args->status != STARTED) {
 			ODPH_ERR("Thread (i:%i) not started.\n", i);
 			break;
 		}
 
 		if (thread[i].start_args.mem_model == ODP_MEM_MODEL_THREAD) {
-			if (wait_pthread(&thread[i], res != NULL ? &res[i] : NULL))
+			printf("join_threads 3: %i/%i\n", i, num);
+			if (wait_pthread(&thread[i], res != NULL ? &res[i] : NULL)) {
+				printf("join_threads 4: %i/%i\n", i, num);
 				break;
+			}
 		} else {
 			if (wait_process(&thread[i], res != NULL ? &res[i] : NULL))
 				break;
 		}
 
+		printf("join_threads 7: %i/%i\n", i, num);
 		start_args->status = NOT_STARTED;
+		printf("join_threads 8: %i/%i\n", i, num);
 	}
 
 	return i;
