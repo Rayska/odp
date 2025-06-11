@@ -3,8 +3,8 @@ name: CI x86_64
 on: [push, pull_request, merge_group]
 env:
   ARCH: x86_64
-  CC: gcc
-  CONTAINER_NAMESPACE: ghcr.io/opendataplane/odp-docker-images
+  'CC': gcc
+  CONTAINER_NAMESPACE: ghcr.io/rayska/odp-docker-images
   OS: ubuntu_24.04
 
 jobs:
