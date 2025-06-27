@@ -158,6 +158,7 @@ typedef struct {
 	int mtu;                /* Interface MTU */
 	int num_om;
 	int num_prio;
+	uint32_t num_prefetch;
 
 	struct {
 		odp_packet_tx_compl_mode_t mode;
@@ -661,9 +662,13 @@ static inline void send_packets(odp_packet_t *pkt_tbl,
 	unsigned int tx_drops;
 	int i;
 	odp_packet_t pkt;
+	uint32_t num_prefetch = gbl_args->appl.num_prefetch;
 
 	if (odp_unlikely(state != NULL))
 		handle_tx_state(state, pkt_tbl, pkts, tx_idx, stats);
+
+	if (num_prefetch)
+		odp_schedule_prefetch(num_prefetch);
 
 	if (odp_unlikely(use_event_queue))
 		sent = event_queue_send(tx_queue, pkt_tbl, pkts);
@@ -1979,6 +1984,7 @@ static void usage(char *progname)
 	       "                                 2: Enable transmission of pause frames\n"
 	       "                                 3: Enable reception and transmission of pause\n"
 	       "                                    frames\n"
+	       "  -A, --prefetch <num>           Number of events to be prefetched. Default: 0.\n"
 	       "  -v, --verbose                  Verbose output.\n"
 	       "  -V, --verbose_pkt              Print debug information on every received\n"
 	       "                                 packet.\n"
@@ -2004,6 +2010,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"count", required_argument, NULL, 'c'},
 		{"time", required_argument, NULL, 't'},
 		{"accuracy", required_argument, NULL, 'a'},
+		{"prefetch", required_argument, NULL, 'A'},
 		{"interface", required_argument, NULL, 'i'},
 		{"mode", required_argument, NULL, 'm'},
 		{"memcpy", required_argument, NULL, 'E'},
@@ -2043,7 +2050,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts = "+c:t:a:i:m:o:O:r:d:s:e:E:k:g:G:I:"
+	static const char *shortopts = "+c:t:a:A:i:m:o:O:r:d:s:e:E:k:g:G:I:"
 				       "b:q:p:R:y:n:l:L:w:W:x:X:z:M:F:uPfTC:vVh";
 
 	appl_args->time = 0; /* loop forever if time to run is 0 */
@@ -2092,6 +2099,9 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 			break;
 		case 'a':
 			appl_args->accuracy = atoi(optarg);
+			break;
+		case 'A':
+			appl_args->prefetch = atoi(optarg);
 			break;
 		case 'r':
 			len = strlen(optarg);
