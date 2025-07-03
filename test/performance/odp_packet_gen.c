@@ -2849,8 +2849,10 @@ static void sig_handler(int signo)
 {
 	(void)signo;
 
-	if (test_global == NULL)
+	if (test_global == NULL) {
+		printf("in test_global == NULL\n");
 		return;
+	}
 
 	odp_atomic_add_u32(&test_global->exit_test, 1);
 }
