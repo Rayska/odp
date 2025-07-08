@@ -57,6 +57,7 @@ typedef struct {
 	int src_idx[NUM_PRIOS]; /**< Source ODP queue */
 	int prio;		/**< Source queue priority */
 	int warm_up_rounds;	/**< Number of completed warm-up rounds */
+	uint32_t burst_id;	/**< ID to indicate which burst the event is from */
 } test_event_t;
 
 /** Test arguments */
@@ -68,6 +69,7 @@ typedef struct {
 	int isolate;
 	int test_rounds;	/**< Number of test rounds (millions) */
 	int warm_up_rounds;	/**< Number of warm-up rounds */
+	int burst_size;		/**< Number of events to enqueue in a burst */
 	struct {
 		int queues;	/**< Number of scheduling queues */
 		int events;	/**< Number of events */
@@ -87,6 +89,7 @@ typedef struct {
 	uint64_t min;	   /**< Minimum event latency */
 	uint64_t max;	   /**< Maximum event latency */
 	uint64_t max_idx;  /**< Index of the maximum latency sample event */
+	uint64_t bursts;   /**< Total number of received bursts */
 } test_stat_t;
 
 /** Performance test statistics (per core) */
@@ -103,6 +106,8 @@ typedef struct {
 	test_args_t      args;	  /**< Parsed command line arguments */
 	odp_queue_t      queue[NUM_PRIOS][MAX_QUEUES]; /**< Scheduled queues */
 	test_common_options_t common_options;	/**< Result export options */
+	odp_atomic_u32_t burst_status[MAX_QUEUES]; /* Atomic burst status tracking */
+	odp_atomic_u32_t next_burst_id; /**< Next burst ID to reserved */
 
 	odp_schedule_group_t group[NUM_PRIOS][MAX_GROUPS];
 
@@ -315,7 +320,7 @@ static int output_results(test_globals_t *globals)
 		for (j = 1; j <= args->cpu_count; j++) {
 			lat = &globals->core_stat[j].prio[i];
 
-			if (lat->sample_events == 0) {
+			if (lat->sample_events == 0 || (args->burst_size && lat->bursts == 0)) {
 				printf("%-8d N/A\n", j);
 				continue;
 			}
@@ -327,8 +332,12 @@ static int output_results(test_globals_t *globals)
 			total.tot += lat->tot;
 			total.sample_events += lat->sample_events;
 			total.events += lat->events;
+			total.bursts += lat->bursts;
 
-			avg = lat->events ? lat->tot / lat->sample_events : 0;
+			if (globals->args.burst_size)
+				avg = lat->events ? (lat->bursts ? lat->tot / lat->bursts : 0) : 0;
+			else
+				avg = lat->events ? lat->tot / lat->sample_events : 0;
 			printf("%-8d %-10" PRIu64 " %-10" PRIu64 " "
 			       "%-10" PRIu64 " %-10" PRIu64 " %-10" PRIu64 " %-10" PRIu64 "\n",
 			       j, avg, lat->min, lat->max, lat->sample_events,
@@ -339,7 +348,11 @@ static int output_results(test_globals_t *globals)
 			printf("Total    N/A\n\n");
 			continue;
 		}
-		avg = total.events ? total.tot / total.sample_events : 0;
+
+		if (globals->args.burst_size)
+			avg = total.events ? total.tot / total.bursts : 0;
+		else
+			avg = total.events ? total.tot / total.sample_events : 0;
 		printf("Total    %-10" PRIu64 " %-10" PRIu64 " %-10" PRIu64 " "
 		       "%-10" PRIu64 " %-10" PRIu64 "\n\n", avg, total.min,
 		       total.max, total.sample_events, total.events);
@@ -392,44 +405,20 @@ static int join_groups(test_globals_t *globals, int thr)
 	return 0;
 }
 
-/**
- * Measure latency of scheduled ODP events
- *
- * Schedule and enqueue events until 'test_rounds' events have been processed.
- * Scheduling latency is measured only from type 'SAMPLE' events. Other events
- * are simply enqueued back to the scheduling queues.
- *
- * For 'TRAFFIC' type events the destination queue is selected from the same
- * priority class as source queue. 'SAMPLE' type event may change priority
- * depending on the command line arguments.
- *
- * @param thr      Thread ID
- * @param globals  Test shared data
- *
- * @retval 0 on success
- * @retval -1 on failure
- */
-static int test_schedule(int thr, test_globals_t *globals)
+static int test_schedule_single(int thr, test_globals_t *globals)
 {
-	odp_time_t time;
 	odp_event_t ev;
+	odp_time_t time;
 	odp_buffer_t buf;
 	odp_queue_t dst_queue;
 	uint64_t latency;
 	uint64_t i;
 	test_event_t *event;
 	test_stat_t *stats;
-	int dst_idx, change_queue;
+	int dst_idx;
+	int change_queue = globals->args.forward_mode != EVENT_FORWARD_NONE ? 1 : 0;
 	int warm_up_rounds = globals->args.warm_up_rounds;
 	uint64_t test_rounds = globals->args.test_rounds * (uint64_t)1000000;
-
-	memset(&globals->core_stat[thr], 0, sizeof(core_stat_t));
-	globals->core_stat[thr].prio[HI_PRIO].min = UINT64_MAX;
-	globals->core_stat[thr].prio[LO_PRIO].min = UINT64_MAX;
-
-	change_queue = globals->args.forward_mode != EVENT_FORWARD_NONE ? 1 : 0;
-
-	odp_barrier_wait(&globals->barrier);
 
 	for (i = 0; i < test_rounds; i++) {
 		ev = odp_schedule(NULL, ODP_SCHED_WAIT);
@@ -485,6 +474,243 @@ static int test_schedule(int thr, test_globals_t *globals)
 			odp_event_free(ev);
 			return -1;
 		}
+	}
+
+	return 0;
+}
+
+/**
+ * Enqueue a burst of sample events.
+ *
+ * This helper function encapsulates the logic for preparing and enqueueing a
+ * burst of sample events. It sets the destination queue, assigns a burst ID,
+ * updates event metadata, and enqueues the burst.
+ *
+ * @param thr            Thread ID
+ * @param globals        Test shared data
+ * @param sample_events  Array of sample events to enqueue
+ * @param burst_size     Number of events in the burst
+ * @param change_queue   Flag indicating if the queue should be changed
+ *
+ * @retval 0 on success
+ * @retval -1 on failure
+ */
+static inline int enqueue_sample_burst(int thr, test_globals_t *globals,
+				       odp_event_t sample_events[],
+				       uint32_t burst_size, int change_queue)
+{
+	test_event_t *event;
+	int new_prio;
+	int dst_idx;
+	odp_queue_t dst_queue;
+	uint32_t burst_id;
+	uint32_t expected = 0;
+	odp_atomic_u32_t *gbl_burst_status = globals->burst_status;
+	odp_atomic_u32_t *next_bid = &globals->next_burst_id;
+	odp_time_t time_stamp;
+	uint32_t i;
+	int enq;
+	int num_enq;
+
+	/* Calculate destination queue */
+	event = odp_buffer_addr(odp_buffer_from_event(sample_events[0]));
+	new_prio = !event->prio;
+
+	if (change_queue)
+		dst_idx = event->src_idx[new_prio] + 1;
+	else
+		dst_idx = event->src_idx[new_prio];
+
+	if (dst_idx >= globals->args.prio[new_prio].queues)
+		dst_idx = 0;
+	dst_queue = globals->queue[new_prio][dst_idx];
+
+	/* Try to find an available burst ID */
+	do {
+		burst_id = odp_atomic_fetch_inc_u32(next_bid) % MAX_QUEUES;
+
+		if (odp_atomic_cas_u32(&gbl_burst_status[burst_id], &expected, burst_size))
+			break;
+	} while (1);
+
+	for (i = 0; i < burst_size; i++) {
+		event = odp_buffer_addr(odp_buffer_from_event(sample_events[i]));
+
+		/* Move sample event to different priority if configured */
+		if (!globals->args.sample_per_prio &&
+		    globals->args.prio[new_prio].queues)
+			event->prio = new_prio;
+		event->src_idx[event->prio] = dst_idx;
+
+		/* Set burst ID for sample events */
+		event->burst_id = burst_id;
+	}
+
+	/* Set timestamp for all sample events */
+	time_stamp = odp_time_global_strict();
+	for (i = 0; i < burst_size; i++) {
+		event = odp_buffer_addr(odp_buffer_from_event(sample_events[i]));
+		event->time_stamp = time_stamp;
+	}
+
+	enq = 0;
+	do {
+		num_enq = odp_queue_enq_multi(dst_queue, &sample_events[enq], burst_size - enq);
+		if (odp_unlikely(num_enq < 0)) {
+			ODPH_ABORT("[%i] Queue enqueue failed.\n", thr);
+			for (i = enq; i < burst_size; i++)
+				odp_event_free(sample_events[i]);
+			return -1;
+		}
+		enq += num_enq;
+	} while (enq < (int)burst_size);
+
+	return 0;
+}
+
+static int test_schedule_burst(int thr, test_globals_t *globals)
+{
+	/* Configuration and state variables */
+	const int change_queue = globals->args.forward_mode != EVENT_FORWARD_NONE ? 1 : 0;
+	const int warm_up_rounds = globals->args.warm_up_rounds;
+	const uint64_t test_rounds = globals->args.test_rounds * (uint64_t)1000000;
+	const uint32_t burst_size = globals->args.burst_size;
+
+	/* Event buffers */
+	odp_event_t ev_burst[burst_size];
+	odp_event_t sample_events[burst_size];
+	uint32_t sample_count = 0;
+
+	/* Scheduled event processing variables */
+	uint32_t num_sched_ev;
+	uint64_t latency;
+	odp_time_t time;
+	odp_event_t ev;
+	test_event_t *event;
+	test_stat_t *stats;
+	odp_queue_t dst_queue;
+	int dst_idx;
+	odp_atomic_u32_t *gbl_burst_status = globals->burst_status;
+
+	/* Loop variables */
+	uint64_t i;
+	uint32_t j;
+
+	/* Main test loop */
+	for (i = 0; i < test_rounds; i++) {
+		/* Schedule events in bursts */
+		num_sched_ev = odp_schedule_multi(NULL, ODP_SCHED_WAIT,
+						  ev_burst, burst_size);
+		time = odp_time_global_strict();
+
+		/* Process each scheduled event */
+		for (j = 0; j < num_sched_ev; j++) {
+			ev = ev_burst[j];
+			event = odp_buffer_addr(odp_buffer_from_event(ev));
+			stats = &globals->core_stat[thr].prio[event->prio];
+
+			/* Handle SAMPLE event latency measurement */
+			if (event->type == SAMPLE) {
+				if (odp_atomic_load_u32(&gbl_burst_status[event->burst_id]) == 1) {
+					odp_atomic_store_u32(&gbl_burst_status[event->burst_id], 0);
+					latency = odp_time_to_ns(time) -
+						  odp_time_to_ns(event->time_stamp);
+
+					if (latency > stats->max) {
+						stats->max = latency;
+						stats->max_idx = stats->sample_events;
+					}
+					if (latency < stats->min)
+						stats->min = latency;
+					stats->tot += latency;
+					stats->bursts++;
+				} else {
+					/* Decrement the count of remaining events in burst */
+					odp_atomic_dec_u32(&gbl_burst_status[event->burst_id]);
+				}
+				stats->sample_events++;
+			}
+
+			/* Handle warm-up event transition */
+			if (odp_unlikely(event->type == WARM_UP)) {
+				event->warm_up_rounds++;
+				if (event->warm_up_rounds >= warm_up_rounds)
+					event->type = SAMPLE;
+			} else {
+				stats->events++;
+			}
+
+			/* Handle event based on type */
+			if (event->type == SAMPLE) {
+				/* Collect sample events for burst enqueueing */
+				sample_events[sample_count++] = ev;
+				 /* Enqueue a full burst of sample events immediately */
+				if (sample_count == burst_size) {
+					if (enqueue_sample_burst(thr, globals, sample_events,
+								 burst_size, change_queue))
+						return -1;
+					sample_count = 0;
+				} else if (odp_unlikely(sample_count > burst_size)) {
+					printf("[T%d] WARNING: Event hoarding detected. "
+						"sample_count (%u) > burst_size (%u)\n",
+						thr, sample_count, burst_size);
+				}
+			} else {
+				/* Calculate destination queue */
+				if (change_queue)
+					dst_idx = event->src_idx[event->prio] + 1;
+				else
+					dst_idx = event->src_idx[event->prio];
+				if (dst_idx >= globals->args.prio[event->prio].queues)
+					dst_idx = 0;
+				event->src_idx[event->prio] = dst_idx;
+				dst_queue = globals->queue[event->prio][dst_idx];
+				/* Enqueue non-sample events immediately */
+				if (odp_queue_enq(dst_queue, ev)) {
+					ODPH_ERR("[%i] Queue enqueue failed.\n", thr);
+					odp_event_free(ev);
+					return -1;
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Measure latency of scheduled ODP events
+ *
+ * Schedule and enqueue events until 'test_rounds' events have been processed.
+ * Scheduling latency is measured only from type 'SAMPLE' events. Other events
+ * are simply enqueued back to the scheduling queues.
+ *
+ * For 'TRAFFIC' type events the destination queue is selected from the same
+ * priority class as source queue. 'SAMPLE' type event may change priority
+ * depending on the command line arguments.
+ *
+ * @param thr      Thread ID
+ * @param globals  Test shared data
+ *
+ * @retval 0 on success
+ * @retval -1 on failure
+ */
+static int test_schedule(int thr, test_globals_t *globals)
+{
+	odp_event_t ev;
+
+	memset(&globals->core_stat[thr], 0, sizeof(core_stat_t));
+	globals->core_stat[thr].prio[HI_PRIO].min = UINT64_MAX;
+	globals->core_stat[thr].prio[LO_PRIO].min = UINT64_MAX;
+
+	odp_barrier_wait(&globals->barrier);
+
+	if (globals->args.burst_size) {
+		if (test_schedule_burst(thr, globals))
+			return -1;
+	} else {
+		if (test_schedule_single(thr, globals))
+			return -1;
 	}
 
 	/* Clear possible locally stored buffers */
@@ -578,6 +804,7 @@ static void usage(void)
 	       "Usage: ./odp_sched_latency [options]\n"
 	       "Optional OPTIONS:\n"
 	       "  -c, --count <number> CPU count, 0=all available, default=1\n"
+	       "  -b, --burst <num> Test burst size.\n"
 	       "  -d, --duration <number> Test duration in scheduling rounds (millions), default=10, min=1\n"
 	       "  -f, --forward-mode <mode> Selection of target queue\n"
 	       "               0: Random (default)\n"
@@ -601,7 +828,7 @@ static void usage(void)
 	       "				number of events per queue, does not include sample event.\n"
 	       "  -r  --sample-per-prio Allocate a separate sample event for each priority. By default\n"
 	       "			a single sample event is used and its priority is changed after\n"
-	       "			each processing round.\n"
+	       "			each processing round. No effect in burst mode.\n"
 	       "  -s, --sync  Scheduled queues' sync type\n"
 	       "               0: ODP_SCHED_SYNC_PARALLEL (default)\n"
 	       "               1: ODP_SCHED_SYNC_ATOMIC\n"
@@ -624,6 +851,7 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 
 	static const struct option longopts[] = {
 		{"count", required_argument, NULL, 'c'},
+		{"burst", required_argument, NULL, 'b'},
 		{"duration", required_argument, NULL, 'd'},
 		{"forward-mode", required_argument, NULL, 'f'},
 		{"num_group", required_argument, NULL, 'g'},
@@ -641,7 +869,7 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 		{NULL, 0, NULL, 0}
 	};
 
-	static const char *shortopts = "+c:d:f:g:i:l:t:m:n:o:p:s:w:rh";
+	static const char *shortopts = "+c:b:d:f:g:i:l:t:m:n:o:p:s:w:rh";
 
 	args->cpu_count = 1;
 	args->forward_mode = EVENT_FORWARD_RAND;
@@ -719,6 +947,9 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 		case 'w':
 			args->warm_up_rounds = atoi(optarg);
 			break;
+		case 'b':
+			args->burst_size = atoi(optarg);
+			break;
 		case 'h':
 			usage();
 			exit(EXIT_SUCCESS);
@@ -756,8 +987,22 @@ static void parse_args(int argc, char *argv[], test_args_t *args)
 		exit(EXIT_FAILURE);
 	}
 
-	if (args->prio[HI_PRIO].queues == 0 || args->sample_per_prio)
+	if (args->prio[HI_PRIO].queues == 0 || (args->sample_per_prio && !args->burst_size))
 		args->prio[LO_PRIO].sample_events = 1;
+
+	if (args->burst_size < 0) {
+		ODPH_ERR("Invalid burst size %i, must be >= 0\n",
+			 args->burst_size);
+		exit(EXIT_FAILURE);
+	}
+
+	/* Ensure we have enough sample events for burst mode */
+	if (args->burst_size) {
+		args->prio[HI_PRIO].sample_events  = args->burst_size * (args->cpu_count / 2);
+		args->prio[LO_PRIO].sample_events  = args->burst_size * (args->cpu_count / 2);
+		if (args->cpu_count % 2)
+			args->prio[HI_PRIO].sample_events += args->burst_size;
+	}
 }
 
 static void randomize_queues(odp_queue_t queues[], uint32_t num, uint64_t *seed)
@@ -865,7 +1110,11 @@ static int calc_queue_sizes(test_globals_t *globals, uint32_t queue_size[])
 			events *= queues;
 
 		/* Reserve room for sample event */
-		events++;
+		/* In burst mode, add a buffer for incoming bursts from other threads */
+		if (args->burst_size > 0)
+			events += args->burst_size * args->cpu_count;
+		else
+			events++;
 
 		queue_size[i] = ODPH_MAX(events, min_queue_size);
 
@@ -1092,6 +1341,10 @@ int main(int argc, char *argv[])
 		err = -1;
 		goto error;
 	}
+
+	odp_atomic_init_u32(&globals->next_burst_id, 0);
+	for (i = 0; i < ODP_THREAD_COUNT_MAX; i++)
+		odp_atomic_init_u32(&globals->burst_status[i], 0);
 
 	odp_barrier_init(&globals->barrier, num_workers);
 
