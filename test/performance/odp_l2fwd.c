@@ -63,6 +63,11 @@
 /* Maximum thread info string length */
 #define EXTRA_STR_LEN          32
 
+/** Long option only settings */
+enum longopt_only {
+	OPT_SCHED_PREFETCH = 256
+};
+
 /* Packet input mode */
 typedef enum pktin_mode_t {
 	DIRECT_RECV,
@@ -158,6 +163,7 @@ typedef struct {
 	int mtu;                /* Interface MTU */
 	int num_om;
 	int num_prio;
+	uint32_t sched_prefetch; /* Number of events to prefetch */
 
 	struct {
 		odp_packet_tx_compl_mode_t mode;
@@ -721,6 +727,7 @@ static int run_worker_sched_mode_vector(void *arg)
 	state_t *state = appl_args->has_state ? &thr_args->state : NULL;
 	int use_event_queue = gbl_args->appl.out_mode;
 	pktin_mode_t in_mode = gbl_args->appl.in_mode;
+	const uint32_t sched_prefetch = appl_args->sched_prefetch;
 
 	max_burst = gbl_args->appl.burst_rx;
 
@@ -801,6 +808,9 @@ static int run_worker_sched_mode_vector(void *arg)
 			dst_idx = gbl_args->dst_port_from_idx[src_idx];
 			fill_eth_addrs(pkt_tbl, pkts, dst_idx);
 
+			if (sched_prefetch)
+				odp_schedule_prefetch(sched_prefetch);
+
 			send_packets(pkt_tbl, pkts, use_event_queue, dst_idx, tx_queue[dst_idx],
 				     pktout[dst_idx], state, stats);
 
@@ -875,6 +885,7 @@ static int run_worker_sched_mode(void *arg)
 	state_t *state = appl_args->has_state ? &thr_args->state : NULL;
 	int use_event_queue = gbl_args->appl.out_mode;
 	pktin_mode_t in_mode = gbl_args->appl.in_mode;
+	const uint32_t sched_prefetch = appl_args->sched_prefetch;
 
 	max_burst = gbl_args->appl.burst_rx;
 
@@ -954,6 +965,9 @@ static int run_worker_sched_mode(void *arg)
 		ODPH_ASSERT(src_idx >= 0);
 		dst_idx = gbl_args->dst_port_from_idx[src_idx];
 		fill_eth_addrs(pkt_tbl, pkts, dst_idx);
+
+		if (sched_prefetch)
+			odp_schedule_prefetch(sched_prefetch);
 
 		send_packets(pkt_tbl, pkts, use_event_queue, dst_idx, tx_queue[dst_idx],
 			     pktout[dst_idx], state, stats);
@@ -1979,6 +1993,7 @@ static void usage(char *progname)
 	       "                                 2: Enable transmission of pause frames\n"
 	       "                                 3: Enable reception and transmission of pause\n"
 	       "                                    frames\n"
+	       "  --schedule_prefetch <num>      Number of events to be prefetched for scheduling. Default: 0.\n"
 	       "  -v, --verbose                  Verbose output.\n"
 	       "  -V, --verbose_pkt              Print debug information on every received\n"
 	       "                                 packet.\n"
@@ -2037,6 +2052,7 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 		{"input_ts", no_argument, NULL, 'T'},
 		{"tx_compl", required_argument, NULL, 'C'},
 		{"flow_control", required_argument, NULL, 'X'},
+		{"schedule_prefetch", required_argument, NULL, OPT_SCHED_PREFETCH},
 		{"verbose", no_argument, NULL, 'v'},
 		{"verbose_pkt", no_argument, NULL, 'V'},
 		{"help", no_argument, NULL, 'h'},
@@ -2386,6 +2402,9 @@ static void parse_args(int argc, char *argv[], appl_args_t *appl_args)
 
 			free(tmp_str);
 			break;
+		case OPT_SCHED_PREFETCH:
+			appl_args->sched_prefetch = atoi(optarg);
+			break;
 		case 'v':
 			appl_args->verbose = 1;
 			break;
@@ -2551,15 +2570,18 @@ static void print_options(void)
 	printf("Segment length:     %u\n", appl_args->seg_len == UINT32_MAX ? 0 :
 	       appl_args->seg_len);
 	printf("Read data:          %u bytes\n", appl_args->data_rd * 8);
-	printf("Prefetch data       %u bytes\n", appl_args->prefetch * 64);
+	printf("Prefetch data:      %u bytes\n", appl_args->prefetch * 64);
 	printf("Vectors per pool:   %u\n", appl_args->num_vec);
 	printf("Vector size:        %u\n", appl_args->vec_size);
 	printf("Priority per IF:   ");
 
 	for (i = 0; i < appl_args->if_count; i++)
 		printf(" %i", appl_args->prio[i]);
+	printf("\n");
 
-	printf("\n\n");
+	printf("Schedule prefetch:  %u events\n", appl_args->sched_prefetch);
+
+	printf("\n");
 }
 
 static void gbl_args_init(args_t *args)
