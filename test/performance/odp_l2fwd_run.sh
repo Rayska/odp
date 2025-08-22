@@ -64,25 +64,25 @@ run_l2fwd()
 		exit 1
 	fi
 
-	# Run odp_packet_gen with one tx thread
+	# Run odp_packet_gen with one tx thread (line-buffered, fully redirected)
 	GEN_LOG=odp_packet_gen_tmp.log
-	(odp_packet_gen${EXEEXT} --gap 0 -i $IF0 \
-			--ipv4_src 192.168.0.1 --ipv4_dst 192.168.0.2 \
-			-r 0 -t 1 2>&1 > $GEN_LOG) \
-			2>&1 > $GEN_LOG &
+	stdbuf -oL -eL odp_packet_gen${EXEEXT} --gap 0 -i "$IF0" \
+		--ipv4_src 192.168.0.1 --ipv4_dst 192.168.0.2 \
+		-r 0 -t 1 >"$GEN_LOG" 2>&1 &
 
 	GEN_PID=$!
 
 	LOG=odp_l2fwd_tmp.log
 
-	# Max 2 workers
-	odp_l2fwd${EXEEXT} -i $IF1,$IF2 -m 0 -t 1 -c 2 | tee $LOG
-	ret=${PIPESTATUS[0]}
+	# Max 2 workers. Avoid tee during execution to prevent interleaving in CI.
+	# Capture both stdout and stderr, then parse and print after completion.
+	stdbuf -oL -eL odp_l2fwd${EXEEXT} -i "$IF1,$IF2" -m 0 -t 1 -c 2 >"$LOG" 2>&1
+	ret=$?
 
-	kill -2 ${GEN_PID}
-	wait ${GEN_PID}
+	kill -2 "${GEN_PID}"
+	wait "${GEN_PID}"
 
-	if [ ! -f $LOG ]; then
+	if [ ! -f "$LOG" ]; then
 		echo "FAIL: $LOG not found"
 		ret=1
 	elif [ $ret -eq 0 ]; then
@@ -90,23 +90,38 @@ run_l2fwd()
 		if [ "${TEST}" = "coverage" ]; then
 			PASS_PPS=10
 		fi
-		MAX_PPS=$(awk '/TEST RESULT/ {print $3}' $LOG)
+		MAX_PPS=$(awk '/TEST RESULT/ {print $3}' "$LOG")
 		NUMREG='^[0-9]+$'
 		echo "PARSED PPS: $MAX_PPS"
 		if ! [[ $MAX_PPS =~ $NUMREG ]]; then
 			echo "FAIL: cannot parse $LOG"
+			# Show logs to aid debugging
+			echo -e "\nodp_l2fwd log"
+			echo "=============="
+			cat "$LOG"
+			echo -e "\nodp_packet_gen"
+			echo "=============="
+			cat "$GEN_LOG"
 			ret=1
 		elif [ "$MAX_PPS" -lt "$PASS_PPS" ]; then
 			echo -e "\nodp_packet_gen"
 			echo "=============="
-			cat $GEN_LOG
+			cat "$GEN_LOG"
 			echo -e "\nFAIL: pps below threshold $MAX_PPS < $PASS_PPS"
 			ret=1
 		fi
+	else
+		# Non-zero exit: show logs
+		echo -e "\nodp_l2fwd log"
+		echo "=============="
+		cat "$LOG"
+		echo -e "\nodp_packet_gen"
+		echo "=============="
+		cat "$GEN_LOG"
 	fi
 
-	rm -f $GEN_LOG
-	rm -f $LOG
+	rm -f "$GEN_LOG"
+	rm -f "$LOG"
 
 	cleanup_pktio_env
 
