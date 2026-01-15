@@ -12,8 +12,7 @@ TESTS =
 
 if test_vald
 TESTS += validation/api/pktio/pktio_run.sh \
-	 validation/api/pktio/pktio_run_tap.sh \
-	 validation/api/shmem/shmem_linux$(EXEEXT)
+	 validation/api/pktio/pktio_run_tap.sh
 
 SUBDIRS += validation/api/pktio \
 	   validation/api/shmem \

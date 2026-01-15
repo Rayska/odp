@@ -31,6 +31,7 @@ static void test_aligned(void)
 	uint32_t align_8 ODP_ALIGNED(8);
 	uint64_t align_16 ODP_ALIGNED(16);
 
+	CU_ASSERT(0);
 	CU_ASSERT((uintptr_t)&align_2 % 2 == 0);
 	CU_ASSERT((uintptr_t)&align_4 % 4 == 0);
 	CU_ASSERT((uintptr_t)&align_8 % 8 == 0);

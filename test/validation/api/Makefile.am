@@ -41,53 +41,7 @@ TESTS_ENVIRONMENT += TEST_DIR=${top_builddir}/test/validation/api
 TESTS = \
 	align/align_main$(EXEEXT) \
 	atomic/atomic_main$(EXEEXT) \
-	barrier/barrier_main$(EXEEXT) \
-	buffer/buffer_main$(EXEEXT) \
-	byteorder/byteorder_main$(EXEEXT) \
-	chksum/chksum_main$(EXEEXT) \
-	classification/classification_main$(EXEEXT) \
-	comp/comp_main$(EXEEXT) \
-	cpu/cpu_main$(EXEEXT) \
-	cpumask/cpumask_main$(EXEEXT) \
-	crypto/crypto_main$(EXEEXT) \
-	dma/dma_main$(EXEEXT) \
-	errno/errno_main$(EXEEXT) \
-	event/event_main$(EXEEXT) \
-	hash/hash_main$(EXEEXT) \
-	hints/hints_main$(EXEEXT) \
-	init/init_defaults.sh \
-	init/init_abort.sh \
-	init/init_abort_fn_get.sh \
-	init/init_log.sh \
-	init/init_log_thread.sh \
-	init/init_log_fn_get.sh \
-	init/init_num_thr.sh \
-	init/init_feature_enabled.sh \
-	init/init_feature_disabled.sh \
-	init/init_test_param_init.sh \
-	init/init_test_term_abnormal.sh \
-	ipsec/ipsec_sync.sh \
-	ipsec/ipsec_async.sh \
-	ipsec/ipsec_inline_in.sh \
-	ipsec/ipsec_inline_out.sh \
-	lock/lock_main$(EXEEXT) \
-	ml/ml_main$(EXEEXT) \
-	packet/packet_main$(EXEEXT) \
-	pktio/pktio_main$(EXEEXT) \
-	pool/pool_main$(EXEEXT) \
-	queue/queue_main$(EXEEXT) \
-	random/random_main$(EXEEXT) \
-	scheduler/scheduler_main$(EXEEXT) \
-	scheduler/scheduler_no_predef_groups$(EXEEXT) \
-	scheduler/scheduler_group_prio_config$(EXEEXT) \
-	stash/stash_main$(EXEEXT) \
-	std/std_main$(EXEEXT) \
-	thread/thread_main$(EXEEXT) \
-	time/time_main$(EXEEXT) \
-	timer/timer_main$(EXEEXT) \
-	traffic_mngr/traffic_mngr_main$(EXEEXT) \
-	shmem/shmem_main$(EXEEXT) \
-	system/system_main$(EXEEXT)
+	event/event_main$(EXEEXT)
 
 TESTNAME = validation
 

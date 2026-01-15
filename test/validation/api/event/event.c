@@ -307,6 +307,8 @@ static void event_test_types_and_subtypes(void)
 	odp_event_t events[MAX_EVENT_TYPES];
 	int i, j, idx;
 
+	CU_ASSERT(0);
+
 	for (i = 0; i < ctx->num_types; i++) {
 		exp_type = ctx->type[i].event_type;
 		exp_sub = (exp_type == ODP_EVENT_PACKET) ? ODP_EVENT_PACKET_BASIC
@@ -410,7 +412,7 @@ static void event_test_user_area_flag(void)
 				CU_ASSERT(flag > 0);
 				break;
 			default:
-				CU_ASSERT(flag != 0);
+				CU_ASSERT(flag == 0);
 			}
 		}
 	}
